@@ -11,6 +11,7 @@ from markdown.extensions.codehilite import CodeHiliteExtension
 from markdown.extensions.extra import ExtraExtension
 from micawber import bootstrap_basic, parse_html
 from micawber.cache import Cache as OEmbedCache
+from markupsafe import Markup
 from peewee import *
 from playhouse.flask_utils import FlaskDB, get_object_or_404, object_list
 from playhouse.sqlite_ext import *
@@ -163,23 +164,35 @@ def drafts():
     return object_list('index.html', query)
 
 
+def _create_or_edit(entry, template):
+    if request.method == 'POST':
+        entry.title = request.form.get('title') or ''
+        entry.content = request.form.get('content') or ''
+        entry.published = request.form.get('published') or False
+        if not (entry.title and entry.content):
+            flash('Title and Content are required.', 'danger')
+        else:
+            # Wrap the call to save in a transaction so we can roll it back
+            # cleanly in the event of an integrity error.
+            try:
+                with database.atomic():
+                    entry.save()
+            except IntegrityError:
+                flash('Error: this title is already in use.', 'danger')
+            else:
+                flash('Entry saved successfully.', 'success')
+                if entry.published:
+                    return redirect(url_for('detail', slug=entry.slug))
+                else:
+                    return redirect(url_for('edit', slug=entry.slug))
+
+    return render_template(template, entry=entry)
+
+
 @app.route('/create/', methods=['GET', 'POST'])
 @login_required
 def create():
-    if request.method == 'POST':
-        if request.form.get('title') and request.form.get('content'):
-            entry = Entry.create(
-                title=request.form['title'],
-                content=request.form['content'],
-                published=request.form.get('published') or False)
-            flash('Entry created successfully.', 'success')
-            if entry.published:
-                return redirect(url_for('detail', slug=entry.slug))
-            else:
-                return redirect(url_for('edit', slug=entry.slug))
-        else:
-            flash('Title and Content are required.', 'danger')
-    return render_template('create.html')
+    return _create_or_edit(Entry(title='', content=''), 'create.html')
 
 
 @app.route('/<slug>/')
